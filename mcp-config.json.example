@@ -1,15 +1,28 @@
 {
   "_comment": [
-    "Copy this file to mcp-config.json and fill in your own paths/keys.",
-    "mcp-config.json is gitignored — it holds machine-specific settings.",
-    "Used by scripts/process.sh via `claude --mcp-config`."
+    "Скопируйте этот файл в mcp-config.json и подставьте свои значения.",
+    "mcp-config.json в .gitignore — он хранит настройки конкретной машины.",
+    "Используется в scripts/process.sh через `claude --mcp-config`.",
+    "",
+    "todoist — обязателен, ключ берётся из .env (TODOIST_API_KEY).",
+    "google — опционален. Если Google не подключали, удалите весь блок",
+    "         \"google\" целиком: бот будет работать без календаря."
   ],
   "mcpServers": {
     "todoist": {
       "command": "npx",
       "args": ["-y", "@doist/todoist-ai"],
       "env": {
-        "TODOIST_API_KEY": "${TODOIST_API_KEY}"
+        "TODOIST_API_KEY": "ВАШ_ТОКЕН_TODOIST"
+      }
+    },
+    "google": {
+      "command": "workspace-mcp",
+      "args": ["--single-user"],
+      "env": {
+        "CREDENTIALS_DIR": "/home/ВАШ_ПОЛЬЗОВАТЕЛЬ/.config/google-workspace-mcp",
+        "GOOGLE_OAUTH_CLIENT_ID": "ВАШ_CLIENT_ID",
+        "GOOGLE_OAUTH_CLIENT_SECRET": "ВАШ_CLIENT_SECRET"
       }
     }
   }

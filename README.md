@@ -45,7 +45,12 @@
 
 Про VPS: минимум 2 ядра и 4 ГБ памяти. Меньше — Claude CLI начнёт задыхаться. Локацию берите поближе к себе.
 
-Инструкции, где взять каждый ключ, — в [docs/](docs/).
+**Все ключи получите заранее** — установщик спросит их по очереди. Пошаговые инструкции для каждого сервиса лежат в [docs/](docs/README.md):
+
+- [Аренда сервера на Beget](docs/vps-beget.md) или [на JustHost](docs/vps-justhost.md)
+- [Как подключиться к серверу](docs/terminal-ssh.md) — для тех, кто впервые открывает терминал
+- [Бот в Telegram](docs/telegram-bot.md) · [Deepgram](docs/deepgram.md) · [Todoist](docs/todoist.md)
+- [Подписка Claude](docs/claude-subscription.md) · [Google Calendar](docs/google-setup.md) (опционально)
 
 ## Установка
 
