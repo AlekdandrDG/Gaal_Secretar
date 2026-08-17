@@ -1,0 +1,145 @@
+---
+type: note
+last_accessed: 2026-05-05
+relevance: 0.1
+tier: archive
+---
+# Repository File Structure
+
+Total items: 133
+
+```
+📁 .claude
+📁 .cursor
+📄 .cursorrules
+📄 .env.example
+📁 .github
+📄 .gitignore
+📁 .husky
+📄 .nvmrc
+📁 .vscode
+📄 CHANGELOG.md
+📄 LICENSE.txt
+📄 README.md
+📄 biome.json
+📁 docs
+📄 openai-mcp-tools.md
+📄 package-lock.json
+📄 package.json
+📄 renovate.json
+📁 scripts
+📁 src
+📄 tsconfig.json
+📄 vite.config.ts
+  📄 claude.md
+  📄 settings.json
+  📄 mcp.json
+  📁 rules
+  📄 PULL_REQUEST_TEMPLATE.md
+  📄 release-please-config.json
+  📄 release-please-manifest.json
+  📁 workflows
+  📄 pre-commit
+  📄 pre-push
+  📄 extensions.json
+  📄 settings.json
+  📄 dev-setup.md
+  📄 mcp-server.md
+  📄 tool-design.md
+  📄 test-executable.cjs
+  📄 validate-schemas.ts
+  📄 filter-helpers.ts
+  📄 index.ts
+  📄 main.ts
+  📄 mcp-helpers.ts
+  📄 mcp-server.ts
+  📄 todoist-tool.ts
+  📄 tool-helpers.test.ts
+  📄 tool-helpers.ts
+  📁 tools
+  📁 utils
+    📄 context7.mdc
+    📄 typescript.mdc
+    📄 check-semantic-pull-request.yml
+    📄 ci.yml
+    📄 publish.yml
+    📄 release-please.yml
+    📁 __tests__
+    📄 add-comments.ts
+    📄 add-projects.ts
+    📄 add-sections.ts
+    📄 add-tasks.ts
+    📄 complete-tasks.ts
+    📄 delete-object.ts
+    📄 fetch.ts
+    📄 find-activity.ts
+    📄 find-comments.ts
+    📄 find-completed-tasks.ts
+    📄 find-project-collaborators.ts
+    📄 find-projects.ts
+    📄 find-sections.ts
+    📄 find-tasks-by-date.ts
+    📄 find-tasks.ts
+    📄 get-overview.ts
+    📄 manage-assignments.ts
+    📄 search.ts
+    📄 update-comments.ts
+    📄 update-projects.ts
+    📄 update-sections.ts
+    📄 update-tasks.ts
+    📄 user-info.ts
+    📄 assignment-validator.ts
+    📄 constants.ts
+    📄 duration-parser.test.ts
+    📄 duration-parser.ts
+    📄 labels.ts
+    📄 output-schemas.ts
+    📄 priorities.ts
+    📄 response-builders.ts
+    📄 sanitize-data.test.ts
+    📄 sanitize-data.ts
+    📄 test-helpers.ts
+    📄 tool-names.ts
+    📄 user-resolver.ts
+      📁 __snapshots__
+      📄 add-comments.test.ts
+      📄 add-projects.test.ts
+      📄 add-sections.test.ts
+      📄 add-tasks.test.ts
+      📄 assignment-integration.test.ts
+      📄 complete-tasks.test.ts
+      📄 delete-object.test.ts
+      📄 fetch.test.ts
+      📄 find-activity.test.ts
+      📄 find-comments.test.ts
+      📄 find-completed-tasks.test.ts
+      📄 find-projects.test.ts
+      📄 find-sections.test.ts
+      📄 find-tasks-by-date.test.ts
+      📄 find-tasks.test.ts
+      📄 get-overview.test.ts
+      📄 search.test.ts
+      📄 tool-annotations.test.ts
+      📄 update-comments.test.ts
+      📄 update-projects.test.ts
+      📄 update-sections.test.ts
+      📄 update-tasks.test.ts
+      📄 user-info.test.ts
+        📄 add-comments.test.ts.snap
+        📄 add-projects.test.ts.snap
+        📄 add-sections.test.ts.snap
+        📄 add-tasks.test.ts.snap
+        📄 complete-tasks.test.ts.snap
+        📄 delete-object.test.ts.snap
+        📄 find-activity.test.ts.snap
+        📄 find-comments.test.ts.snap
+        📄 find-completed-tasks.test.ts.snap
+        📄 find-projects.test.ts.snap
+        📄 find-sections.test.ts.snap
+        📄 find-tasks-by-date.test.ts.snap
+        📄 find-tasks.test.ts.snap
+        📄 get-overview.test.ts.snap
+        📄 update-comments.test.ts.snap
+        📄 update-projects.test.ts.snap
+        📄 update-sections.test.ts.snap
+```

@@ -1,0 +1,9 @@
+[Unit]
+Description=Run Gaal weekly digest Friday morning
+
+[Timer]
+OnCalendar=Fri 06:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

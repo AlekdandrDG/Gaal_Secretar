@@ -1,0 +1,10 @@
+[Unit]
+Description=Gaal failure alert for %i
+
+[Service]
+Type=oneshot
+User=__USER__
+WorkingDirectory=__PROJECT_DIR__
+# Independent of the bot: only needs curl + the token from .env, so it still
+# fires when the bot/processing units are failing.
+ExecStart=__PROJECT_DIR__/scripts/notify.sh "⚠️ Gaal: сбой юнита %i"

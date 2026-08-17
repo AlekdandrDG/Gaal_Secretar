@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+"""todoist-cli — тонкая обёртка над Todoist API v1.
+
+Заменяет `mcp-cli call todoist <tool> '<json>'` на прямые вызовы REST API v1
+(старый v2 задепрекейчен, MCP через npx был хрупким → падения → дубли).
+
+Использование (совместимо с прежними вызовами в промптах):
+    todoist-cli add-tasks '{"tasks":[{"content":"...","due_string":"today","priority":2}]}'
+    todoist-cli find-tasks '{"searchText":"keyword"}'
+    todoist-cli find-tasks-by-date '{"startDate":"today","daysCount":7}'
+    todoist-cli get-overview '{}'
+    todoist-cli find-completed-tasks '{"since":"2026-07-01T00:00:00Z","until":"2026-07-31T23:59:59Z"}'
+    todoist-cli complete-tasks '{"ids":["id1","id2"]}'
+    todoist-cli update-tasks '{"tasks":[{"id":"id","content":"new"}]}'
+    todoist-cli add-projects '{"projects":[{"name":"Имя"}]}'
+
+Токен берётся из env TODOIST_API_KEY. Вывод — JSON в stdout.
+Ошибки — JSON {"error": "..."} в stdout + ненулевой код возврата.
+"""
+import json
+import os
+import sys
+import urllib.request
+import urllib.parse
+import urllib.error
+
+API = "https://api.todoist.com/api/v1"
+TOKEN = os.environ.get("TODOIST_API_KEY") or os.environ.get("TODOIST_API_TOKEN") or ""
+
+
+def _req(method, path, params=None, body=None):
+    url = f"{API}{path}"
+    if params:
+        url += "?" + urllib.parse.urlencode(params)
+    data = json.dumps(body).encode() if body is not None else None
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        raw = resp.read().decode()
+        return json.loads(raw) if raw.strip() else {}
+
+
+def _paginate(path, params):
+    """Собрать все страницы (results/items + next_cursor) в один список."""
+    items = []
+    cursor = None
+    while True:
+        p = dict(params)
+        if cursor:
+            p["cursor"] = cursor
+        d = _req("GET", path, params=p)
+        chunk = d.get("results") or d.get("items") or []
+        items += chunk
+        cursor = d.get("next_cursor")
+        if not cursor:
+            break
+    return items
+
+
+# ── команды ───────────────────────────────────────────────────────────
+
+def get_overview(a):
+    tasks = _paginate("/tasks", {"limit": 200})
+    projects = _paginate("/projects", {"limit": 200})
+    proj_names = {p["id"]: p["name"] for p in projects}
+    out = [{"id": t["id"], "content": t["content"],
+            "due": (t.get("due") or {}).get("date"),
+            "priority": t.get("priority"),
+            "project": proj_names.get(t.get("project_id"), "")}
+           for t in tasks]
+    return {"tasks": out, "count": len(out)}
+
+
+def find_tasks(a):
+    text = (a.get("searchText") or a.get("query") or "").strip()
+    labels = a.get("labels")
+    if labels:
+        # Todoist filter по лейблам
+        q = " | ".join(f"@{l}" for l in labels)
+        tasks = _paginate("/tasks/filter", {"query": q, "limit": 200})
+    else:
+        tasks = _paginate("/tasks", {"limit": 200})
+    if text:
+        tl = text.lower()
+        tasks = [t for t in tasks if tl in t["content"].lower()]
+    return {"tasks": [{"id": t["id"], "content": t["content"],
+                       "due": (t.get("due") or {}).get("date"),
+                       "url": t.get("url")} for t in tasks]}
+
+
+def find_tasks_by_date(a):
+    start = a.get("startDate", "today")
+    days = int(a.get("daysCount", 7))
+    # Todoist filter query по датам
+    if start == "today":
+        query = f"{days} days" if days > 1 else "today"
+    else:
+        query = f"due after: {start} | due: {start}"
+    tasks = _paginate("/tasks/filter", {"query": query, "limit": a.get("limit", 200)})
+    return {"tasks": [{"id": t["id"], "content": t["content"],
+                       "due": (t.get("due") or {}).get("date")} for t in tasks]}
+
+
+def find_completed_tasks(a):
+    params = {"since": a["since"], "until": a["until"], "limit": 200}
+    items = _paginate("/tasks/completed/by_completion_date", params)
+    return {"completed": [{"id": t.get("id"), "content": t.get("content"),
+                           "completed_at": t.get("completed_at")} for t in items],
+            "count": len(items)}
+
+
+def add_tasks(a):
+    created = []
+    for t in a["tasks"]:
+        body = {"content": t["content"]}
+        # нормализация срока: due_string / dueString / due_date
+        due = t.get("due_string") or t.get("dueString") or t.get("due")
+        if due:
+            body["due_string"] = due
+        if t.get("priority"):
+            body["priority"] = t["priority"]
+        if t.get("projectId") or t.get("project_id"):
+            body["project_id"] = t.get("projectId") or t.get("project_id")
+        if t.get("labels"):
+            body["labels"] = t["labels"]
+        if t.get("parentId") or t.get("parent_id"):
+            body["parent_id"] = t.get("parentId") or t.get("parent_id")
+        r = _req("POST", "/tasks", body=body)
+        created.append({"id": r.get("id"), "content": r.get("content"),
+                        "url": r.get("url"),
+                        "due": (r.get("due") or {}).get("date")})
+    return {"created": created, "count": len(created)}
+
+
+def complete_tasks(a):
+    done = []
+    for tid in a["ids"]:
+        _req("POST", f"/tasks/{tid}/close")
+        done.append(tid)
+    return {"completed": done, "count": len(done)}
+
+
+def update_tasks(a):
+    updated = []
+    for t in a["tasks"]:
+        tid = t.pop("id")
+        body = {}
+        for k in ("content", "priority", "labels"):
+            if k in t:
+                body[k] = t[k]
+        due = t.get("due_string") or t.get("dueString")
+        if due:
+            body["due_string"] = due
+        if t.get("projectId") or t.get("project_id"):
+            body["project_id"] = t.get("projectId") or t.get("project_id")
+        if t.get("parentId") or t.get("parent_id"):
+            body["parent_id"] = t.get("parentId") or t.get("parent_id")
+        r = _req("POST", f"/tasks/{tid}", body=body)
+        updated.append({"id": r.get("id"), "content": r.get("content")})
+    return {"updated": updated, "count": len(updated)}
+
+
+def delete_tasks(a):
+    deleted = []
+    for tid in a["ids"]:
+        _req("DELETE", f"/tasks/{tid}")
+        deleted.append(tid)
+    return {"deleted": deleted, "count": len(deleted)}
+
+
+def add_projects(a):
+    created = []
+    for p in a["projects"]:
+        r = _req("POST", "/projects", body={"name": p["name"]})
+        created.append({"id": r.get("id"), "name": r.get("name")})
+    return {"created": created, "count": len(created)}
+
+
+COMMANDS = {
+    "get-overview": get_overview,
+    "find-tasks": find_tasks,
+    "find-tasks-by-date": find_tasks_by_date,
+    "find-completed-tasks": find_completed_tasks,
+    "add-tasks": add_tasks,
+    "complete-tasks": complete_tasks,
+    "update-tasks": update_tasks,
+    "delete-tasks": delete_tasks,
+    "add-projects": add_projects,
+}
+
+
+def main():
+    if not TOKEN:
+        print(json.dumps({"error": "TODOIST_API_KEY not set in environment"}))
+        sys.exit(1)
+    if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
+        print(json.dumps({"error": f"unknown command; available: {', '.join(COMMANDS)}"}))
+        sys.exit(2)
+    cmd = sys.argv[1]
+    try:
+        args = json.loads(sys.argv[2]) if len(sys.argv) > 2 else {}
+    except json.JSONDecodeError as e:
+        print(json.dumps({"error": f"invalid JSON argument: {e}"}))
+        sys.exit(2)
+    try:
+        result = COMMANDS[cmd](args)
+        print(json.dumps(result, ensure_ascii=False))
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode()[:300]
+        print(json.dumps({"error": f"HTTP {e.code}: {detail}"}, ensure_ascii=False))
+        sys.exit(1)
+    except Exception as e:
+        print(json.dumps({"error": f"{type(e).__name__}: {e}"}, ensure_ascii=False))
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

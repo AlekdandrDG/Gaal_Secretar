@@ -1,0 +1,31 @@
+{
+  "name": "d-brain",
+  "version": "2.0.0",
+  "description": "Voice-first personal assistant for capturing thoughts and tasks via Telegram, with goal tracking and Obsidian integration",
+  "author": {
+    "name": "[Your Name]",
+    "url": "https://github.com/[yourusername]"
+  },
+  "license": "MIT",
+  "capabilities": {
+    "agents": true,
+    "skills": true,
+    "rules": true
+  },
+  "integrations": {
+    "telegram": "Voice/text/photo capture",
+    "todoist": "Task management via MCP",
+    "obsidian": "PKM vault storage",
+    "deepgram": "Voice transcription"
+  },
+  "keywords": [
+    "voice-capture",
+    "telegram-bot",
+    "todoist",
+    "obsidian",
+    "pkm",
+    "goals",
+    "productivity",
+    "personal-assistant"
+  ]
+}

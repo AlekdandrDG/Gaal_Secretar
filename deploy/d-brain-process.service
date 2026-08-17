@@ -1,0 +1,13 @@
+[Unit]
+Description=Gaal Daily Processing
+
+[Service]
+Type=oneshot
+User=__USER__
+WorkingDirectory=__PROJECT_DIR__
+ExecStart=__PROJECT_DIR__/scripts/process.sh
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=__PROJECT_DIR__/.env
+Environment=PATH=__HOME__/bin:__HOME__/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=HOME=__HOME__
+RuntimeMaxSec=7200

@@ -1,0 +1,16 @@
+[Unit]
+Description=Gaal Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__PROJECT_DIR__
+ExecStart=__UV_BIN__ run python -m d_brain
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=__PROJECT_DIR__/.env
+
+[Install]
+WantedBy=multi-user.target

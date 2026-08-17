@@ -1,0 +1,16 @@
+{
+  "_comment": [
+    "Copy this file to mcp-config.json and fill in your own paths/keys.",
+    "mcp-config.json is gitignored — it holds machine-specific settings.",
+    "Used by scripts/process.sh via `claude --mcp-config`."
+  ],
+  "mcpServers": {
+    "todoist": {
+      "command": "npx",
+      "args": ["-y", "@doist/todoist-ai"],
+      "env": {
+        "TODOIST_API_KEY": "${TODOIST_API_KEY}"
+      }
+    }
+  }
+}

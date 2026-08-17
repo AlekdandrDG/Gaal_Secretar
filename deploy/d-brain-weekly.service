@@ -1,0 +1,13 @@
+[Unit]
+Description=Gaal Weekly Digest
+After=network.target
+
+[Service]
+Type=oneshot
+User=__USER__
+WorkingDirectory=__PROJECT_DIR__
+ExecStart=__UV_BIN__ run python scripts/weekly.py
+EnvironmentFile=__PROJECT_DIR__/.env
+Environment=HOME=__HOME__
+StandardOutput=journal
+StandardError=journal
