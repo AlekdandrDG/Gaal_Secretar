@@ -299,15 +299,35 @@ collect_tokens() {
     echo "  - Todoist API Token (from Todoist Settings > Integrations > Developer)"
     echo ""
 
-    # Telegram Bot Token
+    # Telegram Bot Token.
+    # Проверяем не только формат, но и живость: отозванный или чужой токен
+    # выглядит правильно, а бот с ним не стартует — и выясняется это
+    # уже в самом конце установки.
     while true; do
         ask "Telegram Bot Token (from @BotFather):"
         read -r TELEGRAM_BOT_TOKEN
-        if validate_telegram_token "$TELEGRAM_BOT_TOKEN"; then
-            success "Token format valid"
+        if ! validate_telegram_token "$TELEGRAM_BOT_TOKEN"; then
+            error "Неверный формат. Должно быть вида: 123456789:ABC-DEF1234ghIkl-zyx57W2v"
+            continue
+        fi
+
+        info "Проверяю токен у Telegram..."
+        local TG_RESPONSE
+        TG_RESPONSE=$(curl -s --max-time 15 "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getMe" 2>/dev/null)
+
+        if echo "$TG_RESPONSE" | grep -q '"ok":true'; then
+            local BOT_NAME
+            BOT_NAME=$(echo "$TG_RESPONSE" | grep -o '"username":"[^"]*"' | head -1 | cut -d'"' -f4)
+            success "Токен подошёл — бот @${BOT_NAME:-неизвестен}"
             break
+        elif [ -z "$TG_RESPONSE" ]; then
+            warn "Не удалось связаться с Telegram — проверьте интернет на сервере"
+            read -p "  Продолжить с этим токеном? (y/N): " -r REPLY
+            [[ $REPLY =~ ^[Yy]$ ]] && break
         else
-            error "Invalid token format. Should be like: 123456789:ABC-DEF1234ghIkl-zyx57W2v"
+            error "Telegram отклонил токен"
+            echo "  Возможные причины: токен отозван, бот удалён, скопирован не полностью."
+            echo "  Возьмите актуальный: @BotFather → /mybots → ваш бот → API Token"
         fi
     done
 
@@ -527,6 +547,9 @@ ExecStart=$HOME/.local/bin/uv run python -m d_brain
 Restart=always
 RestartSec=10
 Environment=PYTHONUNBUFFERED=1
+# Без этого Claude CLI внутри бота не увидит токен авторизации,
+# а часовой пояс не применится — отчёты будут приходить по времени сервера.
+EnvironmentFile=$PROJECT_DIR/.env
 
 [Install]
 WantedBy=multi-user.target"
@@ -646,7 +669,20 @@ check_status() {
         success "Bot service: running"
     else
         STATUS=$(systemctl is-active d-brain-bot 2>/dev/null || echo "unknown")
-        ERRORS+=("Bot service not running (status: $STATUS)")
+
+        # Не просто «не запустился», а почему именно: чаще всего виноват
+        # токен Telegram, и человеку полезнее прочитать это сразу,
+        # чем идти разбирать журнал systemd.
+        REASON=""
+        if journalctl -u d-brain-bot -n 50 --no-pager 2>/dev/null | grep -q "TelegramUnauthorizedError"; then
+            REASON=" — Telegram отклонил токен бота. Возьмите актуальный у @BotFather (/mybots → ваш бот → API Token) и впишите в .env"
+        elif journalctl -u d-brain-bot -n 50 --no-pager 2>/dev/null | grep -q "ValidationError\|Field required"; then
+            REASON=" — в .env не хватает обязательного ключа"
+        elif journalctl -u d-brain-bot -n 50 --no-pager 2>/dev/null | grep -q "Not logged in"; then
+            REASON=" — Claude не авторизован. Выполните: claude setup-token"
+        fi
+
+        ERRORS+=("Бот не запустился (статус: $STATUS)$REASON")
     fi
 
     echo ""
@@ -696,22 +732,93 @@ check_status() {
     fi
 }
 
+# Claude — «мозги» бота. Без авторизации бот запустится, но на любой
+# запрос будет отвечать ошибкой «Not logged in».
+#
+# На сервере нет браузера, поэтому вход идёт через `claude setup-token`:
+# команда печатает ссылку, пользователь открывает её у себя на компьютере,
+# получает код и возвращает его сюда. На выходе — токен, который мы
+# сохраняем в .env (systemd читает этот файл как окружение сервиса).
 authorize_claude() {
-    step "Claude CLI Authorization"
+    step "Авторизация Claude"
 
-    if claude auth status 2>/dev/null | grep -q "Logged in"; then
-        success "Claude CLI already authorized"
+    # Уже входили интерактивно? Тогда сессия лежит в ~/.claude, токен не нужен.
+    if claude auth status 2>/dev/null | grep -q '"loggedIn": *true'; then
+        success "Claude уже авторизован"
         return
     fi
 
-    warn "Claude CLI needs authorization"
+    # Токен мог быть добавлен раньше — при повторном запуске установщика.
+    if grep -q '^CLAUDE_CODE_OAUTH_TOKEN=.\+' "$PROJECT_DIR/.env" 2>/dev/null; then
+        success "Токен Claude уже сохранён в .env"
+        return
+    fi
+
     echo ""
-    echo "Run this command manually:"
-    echo -e "  ${CYAN}claude auth login${NC}"
+    echo "  Claude — это «мозги» Гэл. Без него бот запустится,"
+    echo "  но не сможет обрабатывать заметки и отвечать осмысленно."
     echo ""
-    echo "This will open a browser for authentication."
-    echo "After authorizing, the bot will be able to use Claude for AI processing."
+    echo "  Нужна активная подписка Claude (Pro или Max)."
     echo ""
+    echo -e "  ${YELLOW}Как это будет:${NC}"
+    echo "    1. Сейчас запустится команда авторизации"
+    echo "    2. Она напечатает ссылку — откройте её в браузере"
+    echo "       на своём компьютере (не на сервере)"
+    echo "    3. Войдите в аккаунт Claude и подтвердите доступ"
+    echo "    4. Скопируйте код обратно сюда"
+    echo ""
+    echo -e "  ${RED}ВАЖНО:${NC} на экране появится токен доступа к вашей подписке."
+    echo "  Не показывайте экран посторонним и не ведите трансляцию."
+    echo ""
+
+    read -p "$(echo -e "${YELLOW}?${NC} Авторизоваться сейчас? (Y/n): ")" -r REPLY
+    if [[ $REPLY =~ ^[Nn]$ ]]; then
+        warn "Авторизация пропущена — бот пока не сможет думать"
+        echo "  Сделать позже: claude setup-token"
+        echo "  Затем добавить полученный токен в $PROJECT_DIR/.env строкой:"
+        echo "    CLAUDE_CODE_OAUTH_TOKEN=<токен>"
+        echo "  И перезапустить: sudo systemctl restart d-brain-bot"
+        return
+    fi
+
+    echo ""
+    local TOKEN_OUT
+    TOKEN_OUT=$(claude setup-token 2>&1 | tee /dev/tty) || true
+
+    # Достаём токен из вывода: он начинается с sk-ant- и может быть
+    # разбит переносами строк, поэтому склеиваем.
+    local CLAUDE_TOKEN
+    CLAUDE_TOKEN=$(echo "$TOKEN_OUT" | tr -d ' \n' | grep -o 'sk-ant-[A-Za-z0-9_-]\+' | head -1)
+
+    if [ -z "$CLAUDE_TOKEN" ]; then
+        echo ""
+        warn "Не удалось распознать токен автоматически"
+        echo "  Если токен всё же был выдан — скопируйте его и вставьте ниже."
+        echo "  Или нажмите Enter, чтобы пропустить."
+        echo ""
+        ask "Токен Claude:"
+        read -r CLAUDE_TOKEN
+    fi
+
+    if [ -z "$CLAUDE_TOKEN" ]; then
+        warn "Авторизация не завершена — бот пока не сможет думать"
+        echo "  Сделать позже: claude setup-token"
+        return
+    fi
+
+    # Убираем старую строку, если была, и дописываем новую
+    sed -i '/^CLAUDE_CODE_OAUTH_TOKEN=/d' "$PROJECT_DIR/.env"
+    printf '\n# Токен доступа к подписке Claude\nCLAUDE_CODE_OAUTH_TOKEN=%s\n' "$CLAUDE_TOKEN" >> "$PROJECT_DIR/.env"
+    chmod 600 "$PROJECT_DIR/.env"
+
+    echo ""
+    success "Токен Claude сохранён (в .env, права 600)"
+
+    # Сервис уже запущен — перечитываем окружение
+    if systemctl is-active --quiet d-brain-bot 2>/dev/null; then
+        sudo systemctl restart d-brain-bot
+        success "Бот перезапущен с новым токеном"
+    fi
 }
 
 # =============================================================================
