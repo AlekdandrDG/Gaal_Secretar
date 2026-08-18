@@ -79,40 +79,113 @@ ask() {
 # Validation functions
 # =============================================================================
 
+# Ключи почти всегда копируют мышкой, и вместе с ними приезжают пробелы,
+# переносы строк и невидимые символы. Чистим до проверки — иначе человек
+# видит «неверный формат» на визуально правильном ключе.
+trim_key() {
+    printf '%s' "$1" | tr -d '[:space:]'
+}
+
+# Каждая проверка объясняет, ЧТО не так: длина, символы или структура.
+# Молчаливое «неверный формат» заставляет гадать.
+
 validate_telegram_token() {
     local token="$1"
-    # Telegram bot token format: 123456789:ABC-DEF1234ghIkl-zyx57W2v1u123ew11
-    if [[ $token =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]]; then
-        return 0
+    local len=${#token}
+
+    # Формат: <id бота>:<секрет>, например 123456789:ABC-DEF1234ghIkl-zyx57W2v
+    # Живые токены — около 45 символов, но Telegram границ не обещает,
+    # поэтому проверяем с запасом.
+    if [[ ! $token =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]]; then
+        if [[ $token != *:* ]]; then
+            error "В токене нет двоеточия. Должно быть вида: 123456789:ABC-DEF..."
+        else
+            error "Недопустимые символы. Разрешены цифры, латиница, дефис и подчёркивание"
+        fi
+        return 1
     fi
-    return 1
+
+    if [ "$len" -lt 35 ]; then
+        error "Токен короткий: $len символов, ожидается около 45. Скопирован не полностью?"
+        return 1
+    fi
+
+    if [ "$len" -gt 60 ]; then
+        error "Токен длинный: $len символов, ожидается около 45. Прихвачено лишнее?"
+        return 1
+    fi
+
+    return 0
 }
 
 validate_telegram_id() {
     local id="$1"
-    # Telegram ID is a positive integer
-    if [[ $id =~ ^[0-9]+$ ]] && [ "$id" -gt 0 ]; then
-        return 0
+    local len=${#id}
+
+    if [[ ! $id =~ ^[0-9]+$ ]]; then
+        error "ID должен состоять только из цифр. Возьмите его у @userinfobot"
+        return 1
     fi
-    return 1
+
+    # ID пользователей Telegram — обычно 9-10 цифр.
+    # Частая ошибка: вместо ID вставляют токен бота.
+    if [ "$len" -lt 5 ]; then
+        error "ID короткий: $len цифр, ожидается 9-10"
+        return 1
+    fi
+
+    if [ "$len" -gt 12 ]; then
+        error "ID длинный: $len цифр, ожидается 9-10. Возможно, вставлен токен вместо ID"
+        return 1
+    fi
+
+    return 0
 }
 
 validate_deepgram_key() {
     local key="$1"
-    # Deepgram key is alphanumeric, typically 40+ chars
-    if [[ $key =~ ^[A-Za-z0-9]+$ ]] && [ ${#key} -ge 20 ]; then
-        return 0
+    local len=${#key}
+
+    if [[ ! $key =~ ^[A-Za-z0-9]+$ ]]; then
+        error "Ключ Deepgram состоит только из букв и цифр — уберите лишние символы"
+        return 1
     fi
-    return 1
+
+    # Ключи Deepgram — 40 символов.
+    if [ "$len" -lt 30 ]; then
+        error "Ключ короткий: $len символов, ожидается 40. Скопирован не полностью?"
+        return 1
+    fi
+
+    if [ "$len" -gt 50 ]; then
+        error "Ключ длинный: $len символов, ожидается 40. Прихвачено лишнее?"
+        return 1
+    fi
+
+    return 0
 }
 
 validate_todoist_key() {
     local key="$1"
-    # Todoist API token is alphanumeric, 40 chars
-    if [[ $key =~ ^[A-Za-z0-9]+$ ]] && [ ${#key} -ge 30 ]; then
-        return 0
+    local len=${#key}
+
+    if [[ ! $key =~ ^[A-Za-z0-9]+$ ]]; then
+        error "Токен Todoist состоит только из букв и цифр — уберите лишние символы"
+        return 1
     fi
-    return 1
+
+    # Токены Todoist — 40 символов.
+    if [ "$len" -lt 30 ]; then
+        error "Токен короткий: $len символов, ожидается 40. Скопирован не полностью?"
+        return 1
+    fi
+
+    if [ "$len" -gt 50 ]; then
+        error "Токен длинный: $len символов, ожидается 40. Прихвачено лишнее?"
+        return 1
+    fi
+
+    return 0
 }
 
 # =============================================================================
@@ -306,6 +379,7 @@ collect_tokens() {
     while true; do
         ask "Telegram Bot Token (from @BotFather):"
         read -r TELEGRAM_BOT_TOKEN
+        TELEGRAM_BOT_TOKEN=$(trim_key "$TELEGRAM_BOT_TOKEN")
         if ! validate_telegram_token "$TELEGRAM_BOT_TOKEN"; then
             error "Неверный формат. Должно быть вида: 123456789:ABC-DEF1234ghIkl-zyx57W2v"
             continue
@@ -335,6 +409,7 @@ collect_tokens() {
     while true; do
         ask "Your Telegram User ID (from @userinfobot):"
         read -r TELEGRAM_USER_ID
+        TELEGRAM_USER_ID=$(trim_key "$TELEGRAM_USER_ID")
         if validate_telegram_id "$TELEGRAM_USER_ID"; then
             success "User ID valid"
             break
@@ -347,6 +422,7 @@ collect_tokens() {
     while true; do
         ask "Deepgram API Key (from console.deepgram.com):"
         read -r DEEPGRAM_API_KEY
+        DEEPGRAM_API_KEY=$(trim_key "$DEEPGRAM_API_KEY")
         if validate_deepgram_key "$DEEPGRAM_API_KEY"; then
             success "API Key format valid"
             break
@@ -359,6 +435,7 @@ collect_tokens() {
     while true; do
         ask "Todoist API Token (from Settings > Integrations > Developer):"
         read -r TODOIST_API_KEY
+        TODOIST_API_KEY=$(trim_key "$TODOIST_API_KEY")
         if validate_todoist_key "$TODOIST_API_KEY"; then
             success "API Token format valid"
             break
