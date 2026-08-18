@@ -52,6 +52,8 @@
 - [Бот в Telegram](docs/telegram-bot.md) · [Deepgram](docs/deepgram.md) · [Todoist](docs/todoist.md)
 - [Подписка Claude](docs/claude-subscription.md) · [Google Calendar](docs/google-setup.md) (опционально)
 
+Если что-то пойдёт не так — в [ai-helper-prompt.md](docs/ai-helper-prompt.md) готовый промпт для нейросети: вставляете его в ChatGPT или Claude и копируете туда вывод терминала.
+
 ## Установка
 
 Два шага. Первый выполняется от root на свежей машине, второй — от созданного пользователя.
