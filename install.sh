@@ -28,10 +28,22 @@ INSTALLER_URL="https://raw.githubusercontent.com/${UPSTREAM_USER}/${REPO_NAME}/m
 
 DEFAULT_USER="gaal"
 
+# Отметки «секрет показывался на экране». По ним в финале печатаем,
+# как его отозвать, если установку всё-таки писали на видео.
+SECRETS_SHOWN_CLAUDE=0
+SECRETS_SHOWN_GOOGLE=0
+
 # Куда root кладёт копию скрипта, чтобы её мог прочитать целевой юзер.
 # Именно файл, а не поток: `bash <(curl ...)` даёт временный дескриптор,
 # который после смены пользователя уже не открыть.
-SELF_COPY="/usr/local/lib/gaal-install.sh"
+#
+# Раньше здесь был постоянный путь /usr/local/lib/gaal-install.sh, и это
+# оказалось миной: при повторном запуске свежий скрипт с GitHub на переходе
+# root→gaal уходил в тот же файл — со ВЧЕРАШНИМ кодом. Обновление через
+# повторный запуск не работало вообще, и молча: ни ошибки, ни признака.
+# Теперь копия одноразовая (mktemp), удаляется сразу после переключения,
+# и мусора в системе после установки не остаётся.
+SELF_COPY_PREFIX="/tmp/gaal-install."
 
 # Лог. От root пишем в /var/log, от обычного юзера — к нему в домашнюю.
 if [ "$(id -u)" -eq 0 ]; then
@@ -515,48 +527,48 @@ switch_to_user() {
     # не определена, и без дефолта set -u убил бы скрипт прямо здесь.
     local self_path="${BASH_SOURCE[0]:-}"
 
+    # Имя копии уникально для запуска — переиспользовать нечего в принципе,
+    # поэтому устареть копия не может.
+    local self_copy
+    self_copy=$(mktemp "${SELF_COPY_PREFIX}XXXXXX")
+
     if [ -n "$self_path" ] && [ -f "$self_path" ]; then
-        as_root install -m 0755 -o root -g root "$self_path" "$SELF_COPY"
+        # Текст скрипта уже лежит обычным файлом — берём именно его,
+        # тот самый, что сейчас исполняется.
+        cat "$self_path" > "$self_copy"
     else
         info "Скачиваю установщик для второй части..."
 
-        local tmp_self
-        tmp_self=$(mktemp)
-
-        if ! curl -fsSL "$INSTALLER_URL" -o "$tmp_self"; then
-            rm -f "$tmp_self"
+        if ! curl -fsSL "$INSTALLER_URL" -o "$self_copy"; then
+            rm -f "$self_copy"
             error "Не удалось скачать установщик с GitHub"
             echo "  Проверьте интернет на сервере: curl -I https://github.com"
             echo "  Адрес: $INSTALLER_URL"
             exit 1
         fi
-
-        # Проверяем, что скачался именно скрипт, а не страница ошибки
-        # или пустой файл: иначе su запустит мусор и всё развалится
-        # с непонятным сообщением.
-        if [ ! -s "$tmp_self" ]; then
-            rm -f "$tmp_self"
-            error "Скачанный файл установщика пуст"
-            echo "  Попробуйте ещё раз: возможно, GitHub был временно недоступен."
-            exit 1
-        fi
-
-        if ! head -n 1 "$tmp_self" | grep -q '^#!.*sh'; then
-            rm -f "$tmp_self"
-            error "Скачался не скрипт установки"
-            echo "  Вероятно, GitHub вернул страницу с ошибкой."
-            echo "  Проверьте вручную: curl -I $INSTALLER_URL"
-            exit 1
-        fi
-
-        as_root install -m 0755 -o root -g root "$tmp_self" "$SELF_COPY"
-        rm -f "$tmp_self"
     fi
 
-    if [ ! -s "$SELF_COPY" ]; then
-        error "Не удалось подготовить установщик для второй части"
+    # Проверяем, что перед нами именно скрипт, а не страница ошибки
+    # или пустой файл: иначе su запустит мусор и всё развалится
+    # с непонятным сообщением.
+    if [ ! -s "$self_copy" ]; then
+        rm -f "$self_copy"
+        error "Не удалось подготовить установщик для второй части (файл пуст)"
+        echo "  Попробуйте ещё раз: возможно, GitHub был временно недоступен."
         exit 1
     fi
+
+    if ! head -n 1 "$self_copy" | grep -q '^#!.*sh'; then
+        rm -f "$self_copy"
+        error "Скачался не скрипт установки"
+        echo "  Вероятно, GitHub вернул страницу с ошибкой."
+        echo "  Проверьте вручную: curl -I $INSTALLER_URL"
+        exit 1
+    fi
+
+    # Копия должна быть читаема целевым юзером: mktemp даёт 0600 и владельца
+    # root, поэтому права открываем явно. Секретов в скрипте нет.
+    chmod 0644 "$self_copy"
 
     echo ""
     echo "  Root-часть готова. Дальше установка продолжится"
@@ -566,7 +578,10 @@ switch_to_user() {
     # exec, а не пайп и не подстановка: процесс заменяется целиком,
     # stdin остаётся тем же терминалом — иначе `read` не сможет
     # задавать вопросы и установка встанет.
-    exec su - "$GAAL_USER" -c "GAAL_STAGE=2 GAAL_INSTALL_USER='${GAAL_USER}' bash '${SELF_COPY}' --stage2"
+    #
+    # GAAL_SELF_COPY передаём внутрь, чтобы stage2 удалил временную копию,
+    # когда доработает: exec сюда уже не вернётся, убрать её здесь нечем.
+    exec su - "$GAAL_USER" -c "GAAL_STAGE=2 GAAL_INSTALL_USER='${GAAL_USER}' GAAL_SELF_COPY='${self_copy}' bash '${self_copy}' --stage2"
 }
 
 # =============================================================================
@@ -852,6 +867,41 @@ collect_timezone() {
         fi
         error "Часовой пояс «$BOT_TIMEZONE» не найден. Проверьте написание."
     done
+
+    apply_system_timezone
+}
+
+# Пояс из .env читает только приложение. Расписание же ведёт systemd,
+# а он живёт по СИСТЕМНОМУ времени — на свежей VPS это UTC. Если системный
+# пояс не поправить, d-brain-process.timer (21:00) сработает в полночь
+# по местному, а недельный дайджест (пятница 06:00) — в девять утра.
+# Поэтому выставляем пояс и в системе.
+apply_system_timezone() {
+    [ -n "${BOT_TIMEZONE:-}" ] || return 0
+
+    if ! have timedatectl; then
+        warn "timedatectl не найден — системный часовой пояс не изменён"
+        echo "  Расписание systemd будет работать по времени сервера (обычно UTC)."
+        echo "  Поправить вручную: sudo ln -sf /usr/share/zoneinfo/${BOT_TIMEZONE} /etc/localtime"
+        return 0
+    fi
+
+    # Идемпотентность: уже стоит нужный пояс — не трогаем.
+    local current
+    current=$(timedatectl show -p Timezone --value 2>/dev/null || echo "")
+    if [ "$current" = "$BOT_TIMEZONE" ]; then
+        success "Системный часовой пояс уже ${BOT_TIMEZONE}"
+        return 0
+    fi
+
+    if as_root timedatectl set-timezone "$BOT_TIMEZONE" 2>/dev/null; then
+        success "Системный часовой пояс: ${BOT_TIMEZONE} (по нему пойдёт расписание)"
+    else
+        warn "Не удалось сменить системный часовой пояс на ${BOT_TIMEZONE}"
+        echo "  Бот будет считать время правильно, а расписание systemd —"
+        echo "  по времени сервера. Поправить вручную:"
+        echo -e "    ${CYAN}sudo timedatectl set-timezone ${BOT_TIMEZONE}${NC}"
+    fi
 }
 
 create_env_file() {
@@ -872,6 +922,11 @@ create_env_file() {
 
         if [ "${env_choice:-1}" != "2" ]; then
             success "Оставляю существующие настройки"
+            # Ключи не трогаем, но системный пояс подтянуть надо: у тех,
+            # кто ставился до этой правки, .env уже правильный, а система
+            # всё ещё в UTC — и расписание бьёт мимо.
+            BOT_TIMEZONE=$(grep -m1 '^TZ=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | tr -d "\"' " || true)
+            apply_system_timezone
             return 0
         fi
 
@@ -1072,8 +1127,10 @@ authorize_claude() {
     echo "    3. Войдите в аккаунт Claude и подтвердите доступ"
     echo "    4. Скопируйте код обратно сюда"
     echo ""
-    echo -e "  ${RED}ВАЖНО:${NC} на экране появится токен доступа к вашей подписке."
-    echo "  Не показывайте экран посторонним и не ведите трансляцию."
+    echo -e "  ${RED}${BOLD}ЕСЛИ ИДЁТ ЗАПИСЬ ЭКРАНА ИЛИ ТРАНСЛЯЦИЯ — ОСТАНОВИТЕ ЕЁ СЕЙЧАС.${NC}"
+    echo "  Через несколько секунд на экране появится токен доступа"
+    echo "  к вашей подписке Claude. Кто увидит его — сможет ей пользоваться."
+    echo "  Возобновите запись, когда установка пойдёт дальше."
     echo ""
 
     ask "Авторизоваться сейчас? (Y/n):"
@@ -1157,11 +1214,225 @@ except Exception:
     printf '\n# Токен доступа к подписке Claude\nCLAUDE_CODE_OAUTH_TOKEN=%s\n' "$claude_token" >> "$ENV_FILE"
     chmod 600 "$ENV_FILE"
 
+    SECRETS_SHOWN_CLAUDE=1
+
+    # Токен уже в файле — стираем экран, чтобы он не висел в прокрутке
+    # терминала и не уехал в чужую запись.
+    clear 2>/dev/null || true
+
     echo ""
-    success "Токен Claude сохранён"
+    success "Токен Claude сохранён (с экрана убран)"
 
     as_root systemctl restart d-brain-bot >/dev/null 2>&1 || true
     success "Бот перезапущен с новым токеном"
+}
+
+# -----------------------------------------------------------------------------
+# Google Calendar — единственная опциональная возможность
+# -----------------------------------------------------------------------------
+# Спрашиваем в самом конце и только когда бот уже поднялся: до этого момента
+# человеку нечего терять от отказа, а после — понятно, что именно он
+# докручивает. По умолчанию НЕТ: без календаря бот полностью работает,
+# просто не пишет встречи и билеты.
+connect_google_calendar() {
+    # Бот ещё не поднялся — не время для необязательных настроек:
+    # сначала final_check покажет, что именно сломано.
+    sleep 3
+    if ! systemctl is-active --quiet d-brain-bot; then
+        return 0
+    fi
+
+    step "Google Calendar (по желанию)"
+
+    local cred_dir="$PROJECT_DIR/data/secrets"
+    local cred_path="$cred_dir/google-credentials.json"
+
+    # Идемпотентность: рабочий ключ уже лежит — второй раз не пристаём.
+    if [ -f "$cred_path" ] && google_cred_is_valid "$cred_path"; then
+        success "Google Calendar уже подключён (data/secrets/google-credentials.json)"
+        return 0
+    fi
+
+    echo ""
+    echo "  С календарём Гэл ставит встречи в ваш Google Calendar"
+    echo "  и сама распознаёт билеты — самолёт, поезд — из PDF и фото."
+    echo ""
+    echo "  Без календаря бот работает полностью: голосовые, заметки,"
+    echo "  задачи, отчёты. Пропустить сейчас — нормально,"
+    echo "  подключить можно в любой день."
+    echo ""
+    echo -e "  ${YELLOW}Что нужно приготовить в Google Cloud (5 минут):${NC}"
+    echo "    1. console.cloud.google.com → создать проект"
+    echo "    2. включить в нём Google Calendar API"
+    echo "    3. создать service account (сервисный аккаунт)"
+    echo "    4. создать для него ключ формата JSON и скачать файл"
+    echo "    5. открыть свой календарь этому service account"
+    echo "       (шаг 5 сделаем после — я подскажу, на какой адрес)"
+    echo ""
+    echo "  Подробно, со скриншотами: docs/google-setup.md"
+    echo ""
+
+    ask "Подключить Google Calendar сейчас? (y/N):"
+    read -r reply
+    if [[ ! $reply =~ ^[Yy]$ ]]; then
+        echo ""
+        warn "Пропускаю — встречи и билеты в календарь пока не пойдут"
+        echo "  Подключить позже: запустите установщик ещё раз,"
+        echo "  он спросит про календарь и не тронет остальное."
+        return 0
+    fi
+
+    mkdir -p "$cred_dir"
+
+    echo ""
+    echo -e "  ${RED}${BOLD}ЕСЛИ ИДЁТ ЗАПИСЬ ЭКРАНА ИЛИ ТРАНСЛЯЦИЯ — ОСТАНОВИТЕ ЕЁ СЕЙЧАС.${NC}"
+    echo "  Через несколько секунд на экране появится приватный ключ"
+    echo "  service account. Кто увидит его — получит доступ к календарю."
+    echo ""
+    echo "  Откройте скачанный JSON-файл, скопируйте ВСЁ содержимое"
+    echo "  (от первой фигурной скобки до последней) и вставьте сюда."
+    echo -e "  Потом нажмите Enter и ${BOLD}Ctrl+D${NC}."
+    echo ""
+
+    # cat вместо read: JSON многострочный, и никаких маркеров конца
+    # придумывать не нужно — Ctrl+D закрывает ввод сам.
+    cat > "$cred_path"
+
+    # Ключ уже в файле — убираем его с экрана, чтобы не висел в прокрутке.
+    clear 2>/dev/null || true
+    SECRETS_SHOWN_GOOGLE=1
+
+    if [ ! -s "$cred_path" ]; then
+        rm -f "$cred_path"
+        warn "Ничего не вставлено — Google Calendar пропущен"
+        return 0
+    fi
+
+    if ! google_cred_is_valid "$cred_path"; then
+        rm -f "$cred_path"
+        error "Это не похоже на JSON-ключ service account"
+        echo "  Проверьте, что скопировали файл целиком и что это именно"
+        echo "  ключ сервисного аккаунта (внутри есть type, client_email,"
+        echo "  private_key), а не OAuth-клиент."
+        echo "  Как получить правильный файл: docs/google-setup.md"
+        warn "Google Calendar пропущен — можно подключить позже"
+        return 0
+    fi
+
+    chmod 600 "$cred_path"
+    success "Ключ сохранён: data/secrets/google-credentials.json (права 600)"
+
+    local client_email
+    client_email=$(google_cred_field "$cred_path" client_email)
+
+    # Самая частая грабля: ключ есть, доступа нет. Google при этом
+    # не ругается — события просто молча не появляются.
+    echo ""
+    echo -e "  ${YELLOW}${BOLD}Остался один шаг, без него календарь не заработает.${NC}"
+    echo ""
+    echo "  Адрес вашего service account:"
+    echo ""
+    echo -e "    ${CYAN}${BOLD}${client_email}${NC}"
+    echo ""
+    echo "  Откройте Google Calendar на своём компьютере:"
+    echo "    1. Настройки календаря → «Доступ для отдельных пользователей»"
+    echo "    2. Добавьте этот адрес"
+    echo -e "    3. Права — ${BOLD}«Внесение изменений в мероприятия»${NC}"
+    echo ""
+    echo "  Без этого шага Google принимает запросы, не выдаёт ошибок,"
+    echo "  а события в календаре просто не появляются."
+    echo ""
+
+    ask "Нажмите Enter, когда откроете доступ (или сразу, чтобы сделать позже):"
+    read -r _
+
+    echo ""
+    echo "  В какой календарь писать события?"
+    echo "  Обычно это адрес Gmail, которым вы открыли календарь —"
+    echo "  например, ivan@gmail.com."
+    echo "  Enter — оставить календарь по умолчанию (primary)."
+    echo ""
+    ask "Адрес календаря [Enter = по умолчанию]:"
+    read -r google_calendar_id
+    google_calendar_id=$(trim_key "${google_calendar_id:-}")
+
+    if [ -n "$google_calendar_id" ]; then
+        # Пишем ТОЛЬКО непустое значение. Пустая строка в .env — это не
+        # «не задано»: она перебьёт разумный дефолт primary из config.py,
+        # и бот потеряет календарь вообще. Поэтому при Enter строка
+        # остаётся закомментированной, как и была.
+        sed -i '/^GOOGLE_CALENDAR_ID=/d' "$ENV_FILE"
+        sed -i "s|^# GOOGLE_CALENDAR_ID=.*|GOOGLE_CALENDAR_ID=${google_calendar_id}|" "$ENV_FILE"
+
+        if ! grep -q '^GOOGLE_CALENDAR_ID=' "$ENV_FILE"; then
+            printf '\nGOOGLE_CALENDAR_ID=%s\n' "$google_calendar_id" >> "$ENV_FILE"
+        fi
+        chmod 600 "$ENV_FILE"
+        success "Календарь: ${google_calendar_id}"
+    else
+        success "Оставляю календарь по умолчанию (primary)"
+    fi
+
+    info "Перезапускаю бота, чтобы он увидел календарь..."
+    as_root systemctl restart d-brain-bot >/dev/null 2>&1 || true
+    success "Google Calendar подключён"
+}
+
+# Ключ должен быть валидным JSON, именно service_account, и с полями,
+# без которых библиотека Google всё равно не заведётся.
+google_cred_is_valid() {
+    local path="$1"
+
+    have python3 || return 0   # нечем проверить — доверяем человеку
+
+    python3 - "$path" <<'PY' 2>/dev/null
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        d = json.load(f)
+except Exception:
+    sys.exit(1)
+if not isinstance(d, dict):
+    sys.exit(1)
+if d.get("type") != "service_account":
+    sys.exit(1)
+if not d.get("client_email") or not d.get("private_key"):
+    sys.exit(1)
+sys.exit(0)
+PY
+}
+
+google_cred_field() {
+    local path="$1" field="$2"
+
+    have python3 || { echo "(адрес внутри JSON, поле ${field})"; return 0; }
+
+    python3 - "$path" "$field" <<'PY' 2>/dev/null || echo "(не удалось прочитать)"
+import json, sys
+with open(sys.argv[1]) as f:
+    d = json.load(f)
+print(d.get(sys.argv[2], "") or "")
+PY
+}
+
+# Если во время установки на экране был секрет, а запись всё-таки шла —
+# человек должен знать, что делать. Печатаем только про то, что реально
+# показывали, и только когда показывали.
+print_secret_hygiene_note() {
+    [ "$SECRETS_SHOWN_CLAUDE" = "1" ] || [ "$SECRETS_SHOWN_GOOGLE" = "1" ] || return 0
+
+    echo -e "  ${YELLOW}Если запись экрана всё-таки шла и секрет попал в кадр:${NC}"
+    if [ "$SECRETS_SHOWN_CLAUDE" = "1" ]; then
+        echo "    токен Claude — claude.ai → настройки аккаунта → выйти из всех"
+        echo "    сессий, затем на сервере claude setup-token заново"
+        echo "    и вписать новый токен в ${ENV_FILE}"
+    fi
+    if [ "$SECRETS_SHOWN_GOOGLE" = "1" ]; then
+        echo "    ключ Google — console.cloud.google.com → ваш service account"
+        echo "    → «Ключи» → удалить показанный ключ и создать новый JSON,"
+        echo "    затем запустить установщик заново и вставить его"
+    fi
+    echo ""
 }
 
 # -----------------------------------------------------------------------------
@@ -1200,6 +1471,8 @@ final_check() {
         echo "    перезапустить:      sudo systemctl restart d-brain-bot"
         echo "    остановить:         sudo systemctl stop d-brain-bot"
         echo ""
+        print_secret_hygiene_note
+
         echo "  Установка целиком записана в: $LOG_FILE"
         echo ""
         return 0
@@ -1289,6 +1562,13 @@ stage2_user() {
     # Имя юзера: из переменной (пришли из stage 1) или текущее.
     GAAL_USER="${GAAL_INSTALL_USER:-$(id -un)}"
 
+    # Одноразовая копия скрипта, из которой нас запустил root, больше
+    # не нужна — убираем её, чем бы установка ни кончилась. Файл лежит
+    # в /tmp и принадлежит root, поэтому удаляем через sudo.
+    if [ -n "${GAAL_SELF_COPY:-}" ]; then
+        trap 'as_root rm -f "${GAAL_SELF_COPY}" 2>/dev/null || true' EXIT
+    fi
+
     if [ -z "${GAAL_STAGE:-}" ]; then
         # Запустили сразу под обычным юзером — баннер ещё не показывали.
         print_banner
@@ -1309,6 +1589,7 @@ stage2_user() {
     install_dependencies
     install_systemd_units
     authorize_claude
+    connect_google_calendar
     final_check
 }
 

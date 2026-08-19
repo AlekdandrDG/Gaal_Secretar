@@ -1,8 +1,8 @@
 # systemd units
 
 These are **templates**. Placeholders must be substituted before installing —
-`setup.sh` generates the bot unit on its own, so use these when wiring the
-processing/weekly units by hand.
+`install.sh` fills them in and installs every unit automatically, so reach for
+these only when wiring units by hand.
 
 | Placeholder      | Meaning                                   | Example                      |
 |------------------|-------------------------------------------|------------------------------|
