@@ -1088,18 +1088,58 @@ authorize_claude() {
     fi
 
     echo ""
-    local token_out
-    token_out=$(claude setup-token 2>&1 | tee /dev/tty) || true
 
-    # Достаём токен из вывода: он начинается с sk-ant- и может быть
-    # разбит переносами строк, поэтому склеиваем.
-    local claude_token
-    claude_token=$(echo "$token_out" | tr -d ' \n' | grep -o 'sk-ant-[A-Za-z0-9_-]\+' | head -1) || claude_token=""
+    # Команда идёт НАПРЯМУЮ в терминал — без $(...) и без tee /dev/tty.
+    #
+    # Почему это принципиально: stage2 выполняется внутри `su - <user> -c`,
+    # а у такого процесса нет управляющего терминала. /dev/tty там не
+    # открывается («No such device or address»), tee падает, а вывод
+    # команды уезжает в перехват — человек не видит ни ссылки, ни промпта,
+    # и авторизоваться физически не может.
+    #
+    # Поэтому setup-token печатает прямо на экран и сам читает ответ,
+    # а токен мы забираем не из вывода, а из файла, куда его положил
+    # сам claude.
+    claude setup-token || true
 
+    local claude_token=""
+
+    # claude хранит выданный токен в ~/.claude/.credentials.json
+    # (каталог можно переопределить через CLAUDE_CONFIG_DIR), в поле
+    # claudeAiOauth.accessToken.
+    local cred_file="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json"
+
+    if [ -f "$cred_file" ]; then
+        if have python3; then
+            claude_token=$(python3 -c 'import json,sys
+try:
+    with open(sys.argv[1]) as f:
+        d = json.load(f)
+    print(d.get("claudeAiOauth", {}).get("accessToken", "") or "")
+except Exception:
+    print("")' "$cred_file" 2>/dev/null || echo "")
+        fi
+
+        # Запасной разбор, если python3 почему-то нет: вытаскиваем
+        # значение accessToken простым текстовым поиском.
+        if [ -z "$claude_token" ]; then
+            claude_token=$(tr -d ' \n' < "$cred_file" 2>/dev/null \
+                | grep -o '"accessToken":"[^"]*"' \
+                | head -1 | cut -d'"' -f4 || echo "")
+        fi
+
+        if [ -n "$claude_token" ]; then
+            success "Токен получен из настроек Claude"
+        fi
+    fi
+
+    # Достать программно не вышло — просим вставить руками.
+    # Это штатный путь, а не аварийный: главное, что человек ссылку увидел
+    # и авторизацию прошёл, а токен был показан на экране.
     if [ -z "$claude_token" ]; then
         echo ""
-        warn "Не удалось распознать токен автоматически"
-        echo "  Если токен всё же был выдан — скопируйте его и вставьте ниже."
+        warn "Не удалось прочитать токен автоматически"
+        echo "  Если токен был показан на экране — скопируйте его и вставьте ниже."
         echo "  Или нажмите Enter, чтобы пропустить."
         echo ""
         ask "Токен Claude:"
