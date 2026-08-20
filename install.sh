@@ -188,6 +188,43 @@ validate_telegram_id() {
     return 0
 }
 
+# Долгоживущий токен Claude, который печатает `claude setup-token`.
+# Проверка нужна потому, что рядом крутятся два похожих на токен значения:
+# сессионный accessToken из .credentials.json (без префикса, живёт часы)
+# и ссылка для авторизации. Оба выглядят «как что-то секретное», оба
+# молча пролезали в .env — и бот получал 401 на каждый запрос.
+# Единственный надёжный признак настоящего токена — префикс sk-ant-oat01-.
+validate_claude_token() {
+    local token="$1"
+    local len=${#token}
+
+    if [ -z "$token" ]; then
+        error "Токен пустой"
+        return 1
+    fi
+    if [[ $token != sk-ant-oat01-* ]]; then
+        error "Это не тот токен: настоящий начинается с sk-ant-oat01-"
+        if [[ $token == https://* ]]; then
+            echo "  Похоже, вставлена ссылка для авторизации, а не токен."
+            echo "  Откройте её в браузере, подтвердите доступ — токен покажут после."
+        else
+            echo "  Похоже, скопирован не тот фрагмент вывода."
+            echo "  Нужна строка целиком, от sk-ant-oat01- и до конца."
+        fi
+        return 1
+    fi
+    if [ "$len" -lt 50 ]; then
+        error "Токен короткий: $len символов. Скопирован не полностью?"
+        return 1
+    fi
+    if [[ ! $token =~ ^sk-ant-oat01-[A-Za-z0-9_-]+$ ]]; then
+        error "Недопустимые символы. Разрешены латиница, цифры, дефис и подчёркивание"
+        echo "  Возможно, вместе с токеном прихвачено лишнее из вывода команды."
+        return 1
+    fi
+    return 0
+}
+
 validate_alnum_key() {
     local key="$1" name="$2" expected="$3"
     local len=${#key}
@@ -1109,9 +1146,18 @@ authorize_claude() {
         return 0
     fi
 
-    if grep -q '^CLAUDE_CODE_OAUTH_TOKEN=.\+' "$ENV_FILE" 2>/dev/null; then
-        success "Токен Claude уже сохранён в настройках"
-        return 0
+    # Непустой токен в .env ещё не значит рабочий: раньше сюда попадал
+    # сессионный accessToken, и такой мусор переживал повторные запуски
+    # установщика — «уже сохранён», а бот в 401. Проверяем формат.
+    local saved_token
+    saved_token=$(grep -m1 '^CLAUDE_CODE_OAUTH_TOKEN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "")
+    saved_token=$(trim_key "$saved_token")
+    if [ -n "$saved_token" ]; then
+        if validate_claude_token "$saved_token" 2>/dev/null; then
+            success "Токен Claude уже сохранён в настройках"
+            return 0
+        fi
+        warn "Сохранённый токен Claude неверного формата — перевыпускаю"
     fi
 
     echo ""
@@ -1161,9 +1207,18 @@ authorize_claude() {
 
     local claude_token=""
 
-    # claude хранит выданный токен в ~/.claude/.credentials.json
-    # (каталог можно переопределить через CLAUDE_CONFIG_DIR), в поле
-    # claudeAiOauth.accessToken.
+    # claude хранит данные сессии в ~/.claude/.credentials.json
+    # (каталог можно переопределить через CLAUDE_CONFIG_DIR).
+    #
+    # ВАЖНО: лежащий там claudeAiOauth.accessToken — НЕ то, что нам нужно.
+    # Это короткоживущий токен текущей сессии: без префикса и протухает
+    # за часы. Именно он раньше уезжал в .env, установка отчитывалась
+    # успехом, а бот на каждый запрос получал 401 Invalid bearer token.
+    #
+    # Нам нужен долгоживущий токен (год, префикс sk-ant-oat01-), который
+    # setup-token печатает на экран. Поэтому файл читаем оптимистично —
+    # вдруг там окажется подходящее значение, — но принимаем его только
+    # после валидации. Главный путь теперь — ввод с экрана.
     local cred_file="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json"
 
     if [ -f "$cred_file" ]; then
@@ -1172,36 +1227,67 @@ authorize_claude() {
 try:
     with open(sys.argv[1]) as f:
         d = json.load(f)
-    print(d.get("claudeAiOauth", {}).get("accessToken", "") or "")
+    o = d.get("claudeAiOauth", {})
+    print(o.get("setupToken", "") or o.get("accessToken", "") or "")
 except Exception:
     print("")' "$cred_file" 2>/dev/null || echo "")
         fi
 
-        # Запасной разбор, если python3 почему-то нет: вытаскиваем
-        # значение accessToken простым текстовым поиском.
+        # Запасной разбор, если python3 почему-то нет.
         if [ -z "$claude_token" ]; then
             claude_token=$(tr -d ' \n' < "$cred_file" 2>/dev/null \
                 | grep -o '"accessToken":"[^"]*"' \
                 | head -1 | cut -d'"' -f4 || echo "")
         fi
 
+        claude_token=$(trim_key "$claude_token")
+
         if [ -n "$claude_token" ]; then
-            success "Токен получен из настроек Claude"
+            # Ошибки валидатора глушим: в файле почти всегда сессионный
+            # токен, и это ожидаемо. Пугать человека здесь нечем.
+            if validate_claude_token "$claude_token" >/dev/null 2>&1; then
+                success "Токен получен из настроек Claude"
+            else
+                claude_token=""
+            fi
         fi
     fi
 
-    # Достать программно не вышло — просим вставить руками.
-    # Это штатный путь, а не аварийный: главное, что человек ссылку увидел
-    # и авторизацию прошёл, а токен был показан на экране.
+    # Штатный путь: токен был напечатан на экране — просим вставить.
     if [ -z "$claude_token" ]; then
         echo ""
-        warn "Не удалось прочитать токен автоматически"
-        echo "  Если токен был показан на экране — скопируйте его и вставьте ниже."
-        echo "  Или нажмите Enter, чтобы пропустить."
+        echo "  Скопируйте токен с экрана и вставьте ниже."
+        echo "  Нужна строка, начинающаяся с sk-ant-oat01-"
+        echo "  Или нажмите Enter, чтобы пропустить авторизацию."
         echo ""
-        ask "Токен Claude:"
-        read -r claude_token
-        claude_token=$(trim_key "$claude_token")
+
+        local attempt
+        for attempt in 1 2 3; do
+            ask "Токен Claude:"
+            read -r claude_token
+            claude_token=$(trim_key "$claude_token")
+
+            # Пустой ввод — осознанный отказ, не ошибка.
+            if [ -z "$claude_token" ]; then
+                break
+            fi
+
+            # Валидатор сам объясняет, что именно не так.
+            if validate_claude_token "$claude_token"; then
+                break
+            fi
+
+            claude_token=""
+            if [ "$attempt" -lt 3 ]; then
+                echo ""
+                echo "  Попробуйте ещё раз (попытка $((attempt + 1)) из 3)."
+                echo ""
+            fi
+        done
+
+        if [ -z "$claude_token" ] && [ "$attempt" -eq 3 ]; then
+            warn "Токен так и не введён в правильном формате"
+        fi
     fi
 
     if [ -z "$claude_token" ]; then
@@ -1215,6 +1301,27 @@ except Exception:
     chmod 600 "$ENV_FILE"
 
     SECRETS_SHOWN_CLAUDE=1
+
+    # Формат сошёлся — но это ещё не значит, что токен рабочий.
+    # Прошлый инцидент показал: «установлено успешно» без живой проверки
+    # ничего не стоит. Дёргаем claude один раз и смотрим на код возврата.
+    if have claude; then
+        echo ""
+        echo "  Проверяю токен..."
+        # timeout нужен, чтобы не зависнуть на молчащей сети. В Ubuntu он
+        # есть всегда (coreutils), но если вдруг нет — идём без него:
+        # ошибка «команда не найдена» выглядела бы как нерабочий токен.
+        local guard=""
+        have timeout && guard="timeout 120"
+        if CLAUDE_CODE_OAUTH_TOKEN="$claude_token" $guard claude -p "ответь одним словом: ok" >/dev/null 2>&1; then
+            success "Токен проверен — Claude отвечает"
+        else
+            warn "Токен записан, но проверка не прошла"
+            echo "  Возможно, токен невалиден — или на сервере сейчас нет сети."
+            echo -e "  Проверить вручную: ${CYAN}claude -p \"тест\"${NC}"
+            echo -e "  Перевыпустить токен: ${CYAN}claude setup-token${NC}"
+        fi
+    fi
 
     # Токен уже в файле — стираем экран, чтобы он не висел в прокрутке
     # терминала и не уехал в чужую запись.
